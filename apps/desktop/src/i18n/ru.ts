@@ -1013,6 +1013,8 @@ export const ru = defineLocale({
       currentPill: 'Текущий',
       primaryPill: 'Основной',
       managedPill: 'Управляется приложением',
+      runtimeContainerPill: 'Контейнер',
+      runtimeNativePill: 'Нативный',
       addConnection: 'Добавить соединение',
       editConnection: 'Изменить',
       removeConnection: 'Удалить',

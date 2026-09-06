@@ -781,6 +781,8 @@ export const en: Translations = {
       currentPill: 'Current',
       primaryPill: 'Primary',
       managedPill: 'App-managed',
+      runtimeContainerPill: 'Container',
+      runtimeNativePill: 'Native',
       addConnection: 'Add connection',
       editConnection: 'Edit',
       removeConnection: 'Remove',
