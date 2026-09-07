@@ -30,6 +30,11 @@ export function isBotPinned(bot: RosterRow, metaByName: BotMetaSnapshot) {
   return Boolean(botRosterMeta(bot, metaByName)?.pinned)
 }
 
+/** Unlike `hidden` (display-only), `private` reaches the gateway: see BotMeta.private. */
+export function isBotPrivate(bot: RosterRow, metaByName: BotMetaSnapshot) {
+  return Boolean(botRosterMeta(bot, metaByName)?.private)
+}
+
 /** Hiding the selected bot re-homes the selection to the next visible owner. */
 export function fallbackSelectionAfterHide(name: string) {
   if ($selectedBot.get() !== name) {
