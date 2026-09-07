@@ -35,6 +35,13 @@ export function isBotPrivate(bot: RosterRow, metaByName: BotMetaSnapshot) {
   return Boolean(botRosterMeta(bot, metaByName)?.private)
 }
 
+/** The bot's mesh circle, '' for the shared default. See BotMeta.circle. */
+export function botCircle(bot: RosterRow, metaByName: BotMetaSnapshot): string {
+  const value = botRosterMeta(bot, metaByName)?.circle
+
+  return typeof value === 'string' ? value.trim() : ''
+}
+
 /** Hiding the selected bot re-homes the selection to the next visible owner. */
 export function fallbackSelectionAfterHide(name: string) {
   if ($selectedBot.get() !== name) {

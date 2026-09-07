@@ -231,6 +231,8 @@ async function relayAgentsOn(connection: RelayConnection): Promise<RelayAgentRow
         connection_id: connection.id,
         connection_label: label,
         title: String(profile?.ui_meta?.['hermes-bots']?.title || profile?.display_name || ''),
+        // Mesh circle; "" = the shared circle. The gateway filters remote rows by the reader's circle.
+        circle: String(profile?.ui_meta?.['hermes-bots']?.circle || '').trim().slice(0, 64),
         description: String(profile?.description || '')
       }))
       .filter(row => row.profile)
