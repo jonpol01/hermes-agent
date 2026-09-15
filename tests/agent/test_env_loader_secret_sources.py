@@ -902,3 +902,27 @@ def test_a_plugin_source_discovered_mid_fire_reaches_the_installed_scope(tmp_pat
         secret_scope.reset_multiplex_context(context_token)
         reg_module._reset_registry_for_tests()
     assert "PLUGIN_ONLY_KEY" not in os.environ
+
+
+def test_build_profile_secret_scope_carries_managed_values_with_precedence(tmp_path, monkeypatch):
+    """The administrator-managed ``.env`` beats the profile's own ``.env`` in the launch process
+    (``_apply_managed_env`` applies it last, with override). Under multiplex semantics the installed
+    scope is everything ``get_secret`` reads, so the same precedence must be built into the scope:
+    a managed-only credential must not vanish, and a managed key the profile also sets must not lose
+    to the profile's value. Plain process env that is not managed is still never copied in."""
+    from agent.secret_scope import build_profile_secret_scope
+    from hermes_cli import env_loader
+
+    (tmp_path / ".env").write_text("XAI_API_KEY=user-value\nUSER_ONLY=u\n", encoding="utf-8")
+    monkeypatch.setenv("XAI_API_KEY", "admin-value")
+    monkeypatch.setenv("ORG_TOKEN", "admin-only")
+    monkeypatch.setenv("SHELL_ONLY", "shell")
+    monkeypatch.setattr(env_loader, "_MANAGED_DOTENV_KEYS", {"XAI_API_KEY", "ORG_TOKEN", "MANAGED_BUT_UNSET"})
+
+    scope = build_profile_secret_scope(tmp_path)
+
+    assert scope["XAI_API_KEY"] == "admin-value", "a managed key the profile also sets: policy wins"
+    assert scope["ORG_TOKEN"] == "admin-only", "a managed-only credential reaches the scope"
+    assert scope["USER_ONLY"] == "u"
+    assert "SHELL_ONLY" not in scope, "process env that is not managed stays out of the scope"
+    assert "MANAGED_BUT_UNSET" not in scope

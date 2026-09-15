@@ -248,6 +248,18 @@ def build_profile_secret_scope(hermes_home: Path) -> Dict[str, str]:
     except Exception:
         external_secrets = {}
     secrets.update((k, v) for k, v in external_secrets.items() if not _is_global_env(k))
+    # The administrator-managed .env is policy for every profile: ``_apply_managed_env`` applies it
+    # LAST, with override, so in the launch process its values beat the user's .env and the shell.
+    # Under multiplex semantics this scope is everything ``get_secret`` reads, so the same
+    # precedence has to be built in — otherwise a managed-only credential vanishes on a routed
+    # fire and a managed key the profile also sets loses to the profile's value. The child-env
+    # half of the same rule is ``tools.environments.local.restore_managed_env``.
+    try:
+        from hermes_cli.env_loader import managed_dotenv_keys
+        managed = managed_dotenv_keys()
+    except Exception:
+        managed = frozenset()
+    secrets.update((k, os.environ[k]) for k in managed if k in os.environ and not _is_global_env(k))
     return secrets
 
 

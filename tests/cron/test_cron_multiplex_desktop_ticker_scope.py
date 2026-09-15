@@ -266,3 +266,35 @@ def test_the_restart_safe_handoff_is_not_fail_closed_by_a_routed_tick(tmp_path, 
             build_subprocess_env(scrub_secrets=True)  # the handoff's child env, pre-scope: must not raise
     finally:
         clear_env_passthrough()
+
+
+def test_a_routed_profile_fire_keeps_administrator_managed_values_over_the_profile(tmp_path, monkeypatch):
+    """The managed ``.env`` is policy for every profile: ``_apply_managed_env`` applies it last, with
+    override, so in the launch process it beats the user's ``.env``. Under the routed fire's multiplex
+    semantics the installed scope is everything ``get_secret`` reads — so without the managed layer in
+    the scope a managed-only credential vanished, and a managed key the routed profile also set lost to
+    the routed value. The child-env half of the rule already held (``restore_managed_env``)."""
+    import cron.scheduler as scheduler
+    from agent import secret_scope
+    from cron.scheduler_provider import _profile_cron_scope
+    from hermes_cli import env_loader
+
+    launch, routed = tmp_path / "launch", tmp_path / "launch" / "profiles" / "ops"
+    for home in (launch, routed):
+        (home / "cron").mkdir(parents=True)
+    (routed / ".env").write_text("XAI_API_KEY=routed-key\n", encoding="utf-8")
+    monkeypatch.setenv("HERMES_HOME", str(launch))
+    # What _apply_managed_env leaves behind: the values in os.environ, the names recorded as managed.
+    monkeypatch.setenv("XAI_API_KEY", "admin-key")
+    monkeypatch.setenv("ORG_TOKEN", "admin-only")
+    monkeypatch.setattr(env_loader, "_MANAGED_DOTENV_KEYS", {"XAI_API_KEY", "ORG_TOKEN"})
+    secret_scope.set_multiplex_active(False)
+
+    with _profile_cron_scope(routed):
+        tokens = scheduler._install_fire_secret_scope()
+        try:
+            assert secret_scope.is_multiplex_active() is True
+            assert secret_scope.get_secret("XAI_API_KEY") == "admin-key", "policy beats the routed profile's own value"
+            assert secret_scope.get_secret("ORG_TOKEN") == "admin-only", "a managed-only credential does not vanish"
+        finally:
+            scheduler._reset_fire_secret_scope(tokens)
