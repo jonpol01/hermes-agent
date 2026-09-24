@@ -1324,6 +1324,17 @@ class CompressionCheckpointUnavailable(RuntimeError):
     """Raised when required durable pre-compress checkpointing is unavailable."""
 
 
+class StaleCompactionGeneration(RuntimeError):
+    """This compaction's held history is no longer the live transcript, so its result must not publish.
+
+    Raised by :func:`held_archive_watermark` when the newest row the compressor was handed is no longer
+    active: another compaction committed first and archived it. Neither watermark is safe then — capping
+    at the held rows clones the winner after this stale summary, and keeping the lease watermark archives
+    the winner and publishes the stale result over it. Both leave two generations in the session, so the
+    commit is abandoned. Every caller resolves the cap inside the try that wraps its own commit, so this
+    aborts the write (and rolls the live list back) without a check at each site.
+    """
+
 # Shared by the startup warning and compress-time block so operators see the
 # same recovery path: disable the fail-closed flag, or switch providers.
 _CHECKPOINT_REQUIRED_REMEDIATION = (
@@ -3608,7 +3619,15 @@ def held_archive_watermark(
     held = [m.get("_row_id") for m in rows if isinstance(m, dict)]
     held = [rid for rid in held if isinstance(rid, int) and not isinstance(rid, bool) and rid > 0]
     newest = next((m for m in reversed(rows) if isinstance(m, dict)), None)
-    if newest is None or newest.get("_row_id") not in held or max(held) >= watermark:
+    if newest is None or newest.get("_row_id") not in held:
+        return watermark  # no ids to judge by (the gateway's replay dicts): keep today's watermark
+    # Whether this compaction still owns the session is asked BEFORE the cap questions below, because
+    # losing the generation is not a question about where to cap — at any cap the result is wrong.
+    if session_db.get_message_role(session_id, max(held)) is None:
+        raise StaleCompactionGeneration(
+            f"{session_id}: the newest held row ({max(held)}) is no longer active — another compaction "
+            "committed first, so this result is a lost generation and is not published")
+    if max(held) >= watermark:
         return watermark
     # ...and, when it is a summarized row, that it still matches its durable row. A dict loaded from
     # the DB is born carrying both the id and the persist marker; a pass that rewrote its content drops
@@ -3619,8 +3638,6 @@ def held_archive_watermark(
     # verbatim (without the marker), so its ids are exact and, being newest, they lift the cap above
     # anything a merged row earlier in `messages` absorbed.
     if not any(isinstance(m, dict) for m in (verbatim_tail or ())) and not newest.get(_DB_PERSISTED_MARKER):
-        return watermark
-    if session_db.get_message_role(session_id, max(held)) is None:
         return watermark
     return max(held)
 

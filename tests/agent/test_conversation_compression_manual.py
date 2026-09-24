@@ -269,6 +269,34 @@ def test_in_place_compress_never_leaves_two_live_copies_of_a_row(session_db, sta
     assert len(contents) == len(set(contents))
 
 
+def test_a_compaction_that_lost_its_generation_does_not_publish(session_db):
+    """Two compactions race and one commits first. The loser held a history the winner has since
+    archived, so neither watermark saves it: capping at the held rows clones the winner after the
+    loser's summary, and keeping the lease watermark archives the winner and publishes the loser over
+    it. Either way the session ends up carrying two summary generations, so the loser must abort."""
+    from agent.context_compressor import _DB_PERSISTED_MARKER
+    from agent.conversation_compression import StaleCompactionGeneration, held_archive_watermark
+
+    session_db.create_session("sid", "telegram", model="test/model")
+    held = []
+    for index in range(6):
+        role = "user" if index % 2 == 0 else "assistant"
+        row_id = session_db.append_message("sid", role, f"turn {index}")
+        held.append({"role": role, "content": f"turn {index}", "_row_id": row_id,
+                     _DB_PERSISTED_MARKER: True})
+    start_watermark = session_db.get_active_message_watermark("sid")
+
+    # The winner commits first and archives every row the loser is still holding.
+    session_db.archive_and_compact(
+        "sid", [{"role": "user", "content": "[the winner's summary]"}], watermark=start_watermark)
+
+    with pytest.raises(StaleCompactionGeneration):
+        held_archive_watermark(session_db, "sid", start_watermark, held, None)
+
+    live = [str(m["content"]) for m in session_db.get_messages_as_conversation("sid")]
+    assert live == ["[the winner's summary]"]
+
+
 def test_in_place_compress_never_clones_a_row_a_merge_already_carried(session_db):
     """Resume repair merges consecutive user rows into the first one's dict: that dict keeps its row id, drops the
     persisted marker, and the later row's id leaves the held history. Stopping the archive at the newest held id
