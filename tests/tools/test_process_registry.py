@@ -71,6 +71,31 @@ def _spawn_python_sleep(seconds: float) -> subprocess.Popen:
     )
 
 
+def test_task_id_stays_the_container_key_and_owner_is_its_own_filter(registry):
+    """``task_id`` answers "where does this run", ``owner_task_id`` answers "who may reap it". They are
+    different questions on a shared container key, and hermes_cli.goals.gather_background_processes
+    documents the registry's ``task_id`` as the container key and carries a separate owner filter — so
+    the two must not collapse into one parameter."""
+    shared = _make_session(sid="proc_shared", task_id="default")
+    shared.owner_task_id = "turn-a"
+    sibling = _make_session(sid="proc_sibling", task_id="default")
+    sibling.owner_task_id = "turn-b"
+    registry._running[shared.id] = shared
+    registry._running[sibling.id] = sibling
+
+    by_container = {s["session_id"] for s in registry.list_sessions(task_id="default")}
+    assert by_container == {"proc_shared", "proc_sibling"}          # where they run
+
+    by_owner = {s["session_id"] for s in registry.list_sessions(owner_task_id="turn-a")}
+    assert by_owner == {"proc_shared"}                              # who owns them
+    assert registry.list_sessions(owner_task_id="default") == []    # the container is not an owner
+
+    killed = []
+    registry.kill_process = lambda session_id, **kw: (killed.append(session_id), {"status": "killed"})[1]
+    assert registry.kill_all(owner_task_id="turn-a") == 1
+    assert killed == ["proc_shared"]
+
+
 def test_kill_started_since_preserves_preexisting_and_foreign_processes(registry):
     old = _make_session(sid="proc_old", task_id="session-a")
     finished = _make_session(

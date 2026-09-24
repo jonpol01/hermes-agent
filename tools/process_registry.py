@@ -2270,15 +2270,22 @@ class ProcessRegistry(ProcessCheckpointMixin):
         """O(1) running count for status-bar polling; dict ``len()`` is atomic, no lock."""
         return len(self._running)
 
-    def list_sessions(self, task_id: str = None, session_key: str = None, *, include_retained: bool = False) -> list:
+    def list_sessions(self, task_id: str = None, session_key: str = None, *,
+                      owner_task_id: str = None, include_retained: bool = False) -> list:
         """Running and recently-finished processes for ``task_id`` and/or ``session_key``;
         cross-task entries sharing the gateway session (a forgotten preview server
         blocking session reset) are flagged ``"session_scoped": true``.
 
-        When ``task_id`` is given, processes that task spawned (its ``owner_task_id``) are included. When
-        ``session_key`` is also given, session-scoped background processes (``background: true``) registered
-        under that gateway session are surfaced too, even if they belong to a different task — so the agent
-        can discover a forgotten preview server that is blocking session reset (#29177).
+        ``task_id`` stays the CONTAINER key — where a process runs — because that is what the registry has
+        always modelled and what callers rely on: ``hermes_cli.goals.gather_background_processes`` documents
+        it as "the container key, which collapses to one value for every agent in the process" and carries a
+        separate owner filter for the other question. ``owner_task_id`` is that other question — who owns the
+        process's lifetime — and is what the abandoned-turn reap selects on. Keeping them apart is the point:
+        a caller must not be able to confuse where a process runs with which turn may reap it.
+
+        When ``session_key`` is also given, session-scoped background processes (``background: true``)
+        registered under that gateway session are surfaced too, even if they belong to a different task — so
+        the agent can discover a forgotten preview server that is blocking session reset (#29177).
         """
         # Only an explicit tool query reads historical receipts. Status bars and
         # gateway liveness scans call this frequently and need the live registry.
@@ -2287,10 +2294,11 @@ class ProcessRegistry(ProcessCheckpointMixin):
             sessions.update(self._finished)
             sessions.update(self._running)
         all_sessions = [self._refresh_detached_session(s) for s in sessions.values()]
-        if task_id or session_key:
+        if task_id or session_key or owner_task_id:
             all_sessions = [
                 s for s in all_sessions
-                if (task_id and (s.owner_task_id or s.task_id) == task_id)
+                if (task_id and s.task_id == task_id)
+                or (owner_task_id and (s.owner_task_id or s.task_id) == owner_task_id)
                 or (session_key and s.session_key == session_key)
             ]
         result = []
@@ -2398,20 +2406,28 @@ class ProcessRegistry(ProcessCheckpointMixin):
                 s.id for s in self._running.values() if (s.owner_task_id or s.task_id) == task_id and not s.exited)
 
     def kill_started_since(self, task_id: str, baseline_ids, *, source: str) -> int:
-        """Kill ``task_id`` processes created after ``baseline_ids``. Output is
+        """Kill processes the turn ``task_id`` OWNS that were created after ``baseline_ids``. Output is
         consumed so an abandoned turn can't enqueue a follow-up reviving work the
-        timeout deliberately stopped."""
-        return self.kill_all(task_id, exclude_ids=frozenset(baseline_ids or ()), source=source, consume_output=True)
+        timeout deliberately stopped.
+
+        Owner, not container: every production caller is the abandoned-turn path and already passes the
+        raw turn/session owner, and reaping by container would take a sibling turn's processes with it."""
+        return self.kill_all(owner_task_id=task_id, exclude_ids=frozenset(baseline_ids or ()),
+                             source=source, consume_output=True)
 
     def kill_all(
-        self, task_id: Optional[str] = None, *, exclude_ids: frozenset = frozenset(),
+        self, task_id: Optional[str] = None, *, owner_task_id: Optional[str] = None,
+        exclude_ids: frozenset = frozenset(),
         source: str = "kill_all", consume_output: bool = False) -> int:
-        """Kill all running processes, optionally only those ``task_id`` spawned (its ``owner_task_id``).
-        Returns count killed."""
+        """Kill running processes: all of them, those in a container (``task_id``), or those a turn owns
+        (``owner_task_id``). The two identities stay separate for the reason in :meth:`list_sessions` —
+        the abandoned-turn reap wants the owner, environment teardown wants the container. Returns count
+        killed."""
         with self._lock:
             targets = [
                 s for s in self._running.values()
-                if (task_id is None or (s.owner_task_id or s.task_id) == task_id)
+                if (task_id is None or s.task_id == task_id)
+                and (owner_task_id is None or (s.owner_task_id or s.task_id) == owner_task_id)
                 and s.id not in exclude_ids and not s.exited
             ]
         return sum(
@@ -2550,10 +2566,13 @@ def _list_processes(task_id) -> dict:
         # See #29177.
         from tools.approval_context import get_current_session_key
         session_key = get_current_session_key(default="") or ""
+    # The caller is an agent asking "what did I start", so this is an OWNER question, not a container
+    # one: on a shared container key (keyless API sessions, every default-profile session under
+    # persistent Docker) a container query would list a sibling turn's processes as this turn's.
     return {"processes": [
         _redact_process_result(p)
         for p in process_registry.list_sessions(
-            task_id=task_id, session_key=session_key or None, include_retained=True)]}
+            owner_task_id=task_id, session_key=session_key or None, include_retained=True)]}
 
 
 # action -> (handler(session_id, args) -> dict, redact output?). Output-bearing
