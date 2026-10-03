@@ -47,17 +47,19 @@ Agent 需要使用的机制很简单：将文件渲染到绝对路径（例如 `
 
 ## Kanban：Artifacts 随完成通知一并发送
 
-如果使用 Hermes 的 kanban（看板）多 agent 工作流，worker 可以在调用 `kanban_complete` 时附加可交付文件：
+如果使用 Hermes 的 kanban（看板）多 agent 工作流，worker 可以在调用 `kanban_complete` 时附加可交付文件。worker 应将文件写入任务工作区（`$HERMES_KANBAN_WORKSPACE`，展开为绝对路径）：
 
 ```python
 kanban_complete(
     summary="rendered Q3 revenue chart and report",
     artifacts=[
-        "/tmp/q3-revenue.png",
-        "/tmp/q3-report.pdf",
+        "/home/me/.hermes/kanban/workspaces/t_1a2b3c4d/q3-revenue.png",
+        "/home/me/.hermes/kanban/workspaces/t_1a2b3c4d/q3-report.pdf",
     ],
 )
 ```
+
+scratch 工作区内声明的文件会在工作区清理前复制到任务的持久附件存储。工作区之外的路径按原样记录；`~/.hermes/cache/scratch`（worker 的 `TMPDIR`）中的条目在最后一次写入 24 小时后被清理，因此放在那里的交付物可能在审阅者或下游任务读取之前就已消失。
 
 当 gateway 通知器将"任务完成"消息发送给在 Slack/Telegram 等平台订阅该任务的用户时，也会将每个 artifact 作为原生附件上传到对应聊天中。用户在同一位置获得可交付成果和摘要。
 

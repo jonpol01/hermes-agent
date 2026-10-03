@@ -79,17 +79,24 @@ mutilated.
 ## Kanban: artifacts ride completion notifications
 
 If you use Hermes' kanban multi-agent workflow, workers can attach
-deliverable files to their `kanban_complete` call:
+deliverable files to their `kanban_complete` call. Workers write them inside
+the task workspace (`$HERMES_KANBAN_WORKSPACE`, expanded to an absolute path):
 
 ```python
 kanban_complete(
     summary="rendered Q3 revenue chart and report",
     artifacts=[
-        "~/.hermes/cache/scratch/q3-revenue.png",
-        "~/.hermes/cache/scratch/q3-report.pdf",
+        "/home/me/.hermes/kanban/workspaces/t_1a2b3c4d/q3-revenue.png",
+        "/home/me/.hermes/kanban/workspaces/t_1a2b3c4d/q3-report.pdf",
     ],
 )
 ```
+
+Declared files inside a scratch workspace are copied into the task's durable
+attachments before the workspace is cleaned up. Paths outside the workspace
+are recorded as given; `~/.hermes/cache/scratch` (the worker's `TMPDIR`)
+prunes entries 24 hours after their last write, so a deliverable parked there
+can be gone before a reviewer or a dependent task reads it.
 
 When the gateway notifier delivers the "task completed" message to whoever
 subscribed to the task in Slack/Telegram/etc., it also uploads each artifact
